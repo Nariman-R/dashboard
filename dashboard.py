@@ -1,91 +1,63 @@
 import streamlit as st
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
-import time
 
 st.set_page_config(page_title="Duolingo Рейтинг", layout="centered")
-st.title("🏆 Duolingo Рейтинг Коллег (через парсинг профиля)")
+st.title("🏆 Duolingo Рейтинг Коллег (через user_id API)")
 
-# Загрузка списка пользователей
+# Загрузка users.csv
 try:
-    with open("users.txt") as f:
-        users = [line.strip() for line in f if line.strip()]
+    df_users = pd.read_csv("users.csv")
+    if "user_id" not in df_users.columns or "username" not in df_users.columns:
+        st.error("CSV должен содержать столбцы: user_id, username")
+        st.stop()
 except Exception as e:
-    st.error(f"Ошибка при чтении users.txt: {e}")
-    users = []
+    st.error(f"Не удалось загрузить users.csv: {e}")
+    st.stop()
 
-# Функция парсинга профиля
-def get_duolingo_profile_data(username):
-    url = f"https://www.duolingo.com/profile/{username}"
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+results = []
+st.subheader("🔍 Сбор данных с API...")
+progress = st.progress(0)
+step = 1 / len(df_users)
+
+for i, row in df_users.iterrows():
+    user_id = row["user_id"]
+    username = row["username"]
+    url = f"https://www.duolingo.com/users/{user_id}"
 
     try:
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code != 200:
-            return {"username": username, "error": f"HTTP {r.status_code}"}
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            st.warning(f"⚠️ {username}: HTTP {response.status_code}")
+            continue
 
-        soup = BeautifulSoup(r.text, "html.parser")
+        data = response.json()
 
-        # Найти XP
-        xp = 0
-        xp_block = soup.find("div", string=lambda s: s and "XP" in s)
-        if xp_block:
-            xp_text = xp_block.text.strip().replace(",", "")
-            xp = int(xp_text.replace("XP", "").strip())
-
-        # Найти streak
-        streak = 0
-        streak_block = soup.find("div", string=lambda s: s and "day streak" in s.lower())
-        if not streak_block:
-            streak_block = soup.find("div", string=lambda s: s and "🔥" in s)
-        if streak_block:
-            digits = ''.join(filter(str.isdigit, streak_block.text))
-            streak = int(digits)
-
-        return {
+        result = {
             "username": username,
-            "totalXp": xp,
-            "streak": streak
+            "totalXp": data.get("totalXp", 0),
+            "streak": data.get("site_streak", 0)
         }
+        results.append(result)
+        st.success(f"✅ {username}: {result['totalXp']} XP, 🔥 {result['streak']} дней")
     except Exception as e:
-        return {"username": username, "error": str(e)}
+        st.warning(f"⚠️ {username}: ошибка {e}")
+    
+    progress.progress((i + 1) * step)
 
-# Основной блок
-if not users:
-    st.warning("Список пользователей пуст. Добавьте логины в users.txt.")
-else:
-    results = []
-    st.subheader("🔍 Сбор данных с профилей...")
-    progress = st.progress(0)
-    step = 1 / len(users)
-
-    for i, user in enumerate(users):
-        data = get_duolingo_profile_data(user)
-        if "error" in data:
-            st.warning(f"⚠️ {user}: {data['error']}")
-        else:
-            st.success(f"✅ {user}: {data['totalXp']} XP, 🔥 {data['streak']} дней")
-            results.append(data)
-        progress.progress((i + 1) * step)
-        time.sleep(0.5)  # анти-флуд защита
-
+# Отображение результатов
+if results:
     df = pd.DataFrame(results)
+    df = df.sort_values("totalXp", ascending=False)
 
-    if not df.empty:
-        df = df.sort_values("totalXp", ascending=False)
+    st.subheader("📋 Рейтинг участников")
+    st.dataframe(df, use_container_width=True)
 
-        st.subheader("📋 Рейтинг участников")
-        st.dataframe(df, use_container_width=True)
+    st.subheader("📊 Очки (XP)")
+    st.bar_chart(df.set_index("username")["totalXp"])
 
-        st.subheader("📊 Очки (XP)")
-        st.bar_chart(df.set_index("username")["totalXp"])
-
-        st.subheader("🔥 Стрик (дни подряд)")
-        st.bar_chart(df.set_index("username")["streak"])
-
-        st.caption("Данные собраны без авторизации через парсинг публичных профилей.")
-    else:
-        st.warning("Не удалось собрать данные. Возможно, профили скрыты или структура сайта изменилась.")
+    st.subheader("🔥 Стрик (дни подряд)")
+    st.bar_chart(df.set_index("username")["streak"])
+else:
+    st.warning("Не удалось собрать данные ни по одному участнику.")
