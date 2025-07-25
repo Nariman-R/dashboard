@@ -1,11 +1,13 @@
 import streamlit as st
 import pandas as pd
 import requests
+from bs4 import BeautifulSoup
+import time
 
 st.set_page_config(page_title="Duolingo Рейтинг", layout="centered")
-st.title("🏆 Duolingo Рейтинг Коллег")
+st.title("🏆 Duolingo Рейтинг Коллег (через парсинг профиля)")
 
-# Загружаем список пользователей
+# Загрузка списка пользователей
 try:
     with open("users.txt") as f:
         users = [line.strip() for line in f if line.strip()]
@@ -13,38 +15,66 @@ except Exception as e:
     st.error(f"Ошибка при чтении users.txt: {e}")
     users = []
 
+# Функция парсинга профиля
+def get_duolingo_profile_data(username):
+    url = f"https://www.duolingo.com/profile/{username}"
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            return {"username": username, "error": f"HTTP {r.status_code}"}
+
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        # Найти XP
+        xp = 0
+        xp_block = soup.find("div", string=lambda s: s and "XP" in s)
+        if xp_block:
+            xp_text = xp_block.text.strip().replace(",", "")
+            xp = int(xp_text.replace("XP", "").strip())
+
+        # Найти streak
+        streak = 0
+        streak_block = soup.find("div", string=lambda s: s and "day streak" in s.lower())
+        if not streak_block:
+            streak_block = soup.find("div", string=lambda s: s and "🔥" in s)
+        if streak_block:
+            digits = ''.join(filter(str.isdigit, streak_block.text))
+            streak = int(digits)
+
+        return {
+            "username": username,
+            "totalXp": xp,
+            "streak": streak
+        }
+    except Exception as e:
+        return {"username": username, "error": str(e)}
+
+# Основной блок
 if not users:
     st.warning("Список пользователей пуст. Добавьте логины в users.txt.")
 else:
-    st.subheader("📥 Сбор данных с Duolingo...")
     results = []
+    st.subheader("🔍 Сбор данных с профилей...")
+    progress = st.progress(0)
+    step = 1 / len(users)
 
-    # Добавляем User-Agent чтобы избежать ошибки 406
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-    }
+    for i, user in enumerate(users):
+        data = get_duolingo_profile_data(user)
+        if "error" in data:
+            st.warning(f"⚠️ {user}: {data['error']}")
+        else:
+            st.success(f"✅ {user}: {data['totalXp']} XP, 🔥 {data['streak']} дней")
+            results.append(data)
+        progress.progress((i + 1) * step)
+        time.sleep(0.5)  # анти-флуд защита
 
-    for user in users:
-        url = f"https://www.duolingo.com/api/1/users/show?username={user}"
-        try:
-            r = requests.get(url, headers=headers, timeout=10)
-            if r.status_code == 200:
-                j = r.json()
-                results.append({
-                    "username": user,
-                    "streak": j.get("streak", 0),
-                    "totalXp": j.get("totalXp", 0)
-                })
-                st.success(f"✅ {user} загружен")
-            else:
-                st.warning(f"⚠️ {user} — ошибка {r.status_code}")
-        except Exception as e:
-            st.error(f"❌ {user} — сбой запроса: {e}")
-
-    # Преобразуем в таблицу
     df = pd.DataFrame(results)
 
-    if not df.empty and "totalXp" in df.columns:
+    if not df.empty:
         df = df.sort_values("totalXp", ascending=False)
 
         st.subheader("📋 Рейтинг участников")
@@ -56,6 +86,6 @@ else:
         st.subheader("🔥 Стрик (дни подряд)")
         st.bar_chart(df.set_index("username")["streak"])
 
-        st.caption("Данные обновляются при каждом открытии страницы.")
+        st.caption("Данные собраны без авторизации через парсинг публичных профилей.")
     else:
-        st.warning("Не удалось получить данные ни по одному пользователю.")
+        st.warning("Не удалось собрать данные. Возможно, профили скрыты или структура сайта изменилась.")
