@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 
 def get_data(users):
-    results = [rakhimov82]
+    results = []
     for user in users:
         url = f"https://www.duolingo.com/api/1/users/show?username={user}"
         r = requests.get(url)
