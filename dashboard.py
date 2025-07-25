@@ -1,15 +1,18 @@
 import streamlit as st
 import pandas as pd
 import requests
+from bs4 import BeautifulSoup
+import json
+import re
 
 st.set_page_config(page_title="Duolingo Рейтинг", layout="centered")
-st.title("🏆 Duolingo Рейтинг Коллег (по user_id из users.txt)")
+st.title("🏆 Duolingo Рейтинг Коллег (парсинг открытых профилей)")
 
-# Загрузка списка ID
+# Загрузка usernames из users.txt
 try:
     with open("users.txt", "r") as f:
-        user_ids = [line.strip() for line in f if line.strip()]
-    if not user_ids:
+        usernames = [line.strip() for line in f if line.strip()]
+    if not usernames:
         st.error("Файл users.txt пустой.")
         st.stop()
 except Exception as e:
@@ -17,44 +20,60 @@ except Exception as e:
     st.stop()
 
 results = []
-st.subheader("🔍 Сбор данных с Duolingo API...")
+st.subheader("🔍 Сбор данных с профилей...")
 progress = st.progress(0)
-step = 1 / len(user_ids)
+step = 1 / len(usernames)
 
-for i, user_id in enumerate(user_ids):
-    url = f"https://www.duolingo.com/users/{user_id}"
+def extract_json_from_html(html_text):
+    # Ищем JSON внутри тега <script id="__NEXT_DATA__">
+    soup = BeautifulSoup(html_text, "html.parser")
+    script_tag = soup.find("script", {"id": "__NEXT_DATA__"})
+    if script_tag:
+        try:
+            return json.loads(script_tag.string)
+        except Exception:
+            return None
+    return None
+
+for i, username in enumerate(usernames):
+    url = f"https://www.duolingo.com/profile/{username}"
+    headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            st.warning(f"⚠️ ID {user_id}: HTTP {response.status_code}")
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code != 200:
+            st.warning(f"⚠️ {username}: HTTP {res.status_code}")
             continue
 
-        data = response.json()
-        username = data.get("username", f"user_{user_id}")
-        total_xp = data.get("totalXp", 0)
-        streak = data.get("site_streak", 0)
+        json_data = extract_json_from_html(res.text)
+        if not json_data:
+            st.warning(f"⚠️ {username}: не удалось извлечь JSON")
+            continue
+
+        # Путь к XP и стрику внутри JSON
+        user_data = json_data["props"]["pageProps"]["userData"]
+
+        total_xp = user_data.get("totalXp", 0)
+        streak = user_data.get("streak", 0)
 
         results.append({
-            "user_id": user_id,
             "username": username,
             "totalXp": total_xp,
             "streak": streak
         })
         st.success(f"✅ {username}: {total_xp} XP, 🔥 {streak} дней")
     except Exception as e:
-        st.warning(f"❌ ID {user_id}: ошибка {e}")
-    
+        st.warning(f"❌ {username}: ошибка {e}")
+
     progress.progress((i + 1) * step)
 
-# Отображение результатов
+# Отображение рейтинга
 if results:
     df = pd.DataFrame(results)
     df = df.sort_values("totalXp", ascending=False)
 
     st.subheader("📋 Рейтинг участников")
-    st.dataframe(df[["username", "totalXp", "streak"]], use_container_width=True)
+    st.dataframe(df, use_container_width=True)
 
     st.subheader("📊 Очки (XP)")
     st.bar_chart(df.set_index("username")["totalXp"])
@@ -62,4 +81,4 @@ if results:
     st.subheader("🔥 Стрик (дни подряд)")
     st.bar_chart(df.set_index("username")["streak"])
 else:
-    st.warning("Не удалось собрать данные ни по одному user_id.")
+    st.warning("Не удалось получить данные ни по одному пользователю.")
