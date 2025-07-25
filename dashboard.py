@@ -5,7 +5,7 @@ import requests
 st.set_page_config(page_title="Duolingo Рейтинг", layout="centered")
 st.title("🏆 Duolingo Рейтинг Коллег")
 
-# Загрузка списка пользователей
+# Загружаем список пользователей
 try:
     with open("users.txt") as f:
         users = [line.strip() for line in f if line.strip()]
@@ -19,10 +19,15 @@ else:
     st.subheader("📥 Сбор данных с Duolingo...")
     results = []
 
+    # Добавляем User-Agent чтобы избежать ошибки 406
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
+
     for user in users:
         url = f"https://www.duolingo.com/api/1/users/show?username={user}"
         try:
-            r = requests.get(url, timeout=10)
+            r = requests.get(url, headers=headers, timeout=10)
             if r.status_code == 200:
                 j = r.json()
                 results.append({
@@ -36,12 +41,12 @@ else:
         except Exception as e:
             st.error(f"❌ {user} — сбой запроса: {e}")
 
-    # Преобразуем в DataFrame
+    # Преобразуем в таблицу
     df = pd.DataFrame(results)
 
     if not df.empty and "totalXp" in df.columns:
         df = df.sort_values("totalXp", ascending=False)
-        
+
         st.subheader("📋 Рейтинг участников")
         st.dataframe(df, use_container_width=True)
 
